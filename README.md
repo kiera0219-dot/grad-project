@@ -13,8 +13,8 @@ IAM, S3, RDS, CloudTrail 등 주요 서비스를 대상으로 취약점을 탐�
 
 ```bash
 git clone https://github.com/kiera0219-dot/grad-project.git
-cd grad-projec
-t
+cd grad-project
+
 ```
 
 ### 2. 가상환경 생성 및 실행
