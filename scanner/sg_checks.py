@@ -93,3 +93,55 @@ def check_security_group_rdp_open():
             })
 
     return results
+
+def check_security_group_all_open():
+    import boto3
+
+    ec2 = boto3.client("ec2")
+    results = []
+
+    print("\n=== Security Group 전체 포트 개방 점검 결과 ===")
+
+    response = ec2.describe_security_groups()
+    security_groups = response["SecurityGroups"]
+
+    for sg in security_groups:
+        sg_name = sg["GroupName"]
+        sg_id = sg["GroupId"]
+
+        for permission in sg["IpPermissions"]:
+            from_port = permission.get("FromPort")
+            to_port = permission.get("ToPort")
+            ip_ranges = permission.get("IpRanges", [])
+
+            for ip in ip_ranges:
+                cidr = ip["CidrIp"]
+
+                # 모든 포트 허용 (FromPort / ToPort 없거나 0-65535)
+                if cidr == "0.0.0.0/0" and (
+                    from_port is None or
+                    to_port is None or
+                    (from_port == 0 and to_port == 65535)
+                ):
+                    print(f"[FAIL] {sg_name} ({sg_id}) - 전체 포트 개방")
+                    results.append({
+                        "item": "Security Group ALL Open",
+                        "target": sg_name,
+                        "risk": "High",
+                        "status": "Fail",
+                        "kisa_code": "KISA-CLD-13",
+                        "detail": f"{sg_name} ({sg_id})은 모든 포트가 0.0.0.0/0에 개방되어 있습니다."
+                    })
+                    break
+        else:
+            print(f"[PASS] {sg_name} ({sg_id}) - 전체 개방 없음")
+            results.append({
+                "item": "Security Group ALL Open",
+                "target": sg_name,
+                "risk": "Low",
+                "status": "Pass",
+                "kisa_code": "KISA-CLD-13",
+                "detail": f"{sg_name} ({sg_id})은 전체 포트 개방이 없습니다."
+            })
+
+    return results

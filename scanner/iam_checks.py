@@ -134,3 +134,98 @@ def check_iam_password_policy():
         })
 
     return results
+
+def check_iam_access_key_unused(days_threshold=90):
+    import boto3
+    from datetime import datetime, timezone
+
+    iam = boto3.client("iam")
+    results = []
+
+    print("\n=== IAM Access Key 미사용 점검 결과 ===")
+
+    users = iam.list_users()["Users"]
+
+    for user in users:
+        user_name = user["UserName"]
+
+        access_keys = iam.list_access_keys(UserName=user_name)["AccessKeyMetadata"]
+
+        for key in access_keys:
+            access_key_id = key["AccessKeyId"]
+
+            last_used_info = iam.get_access_key_last_used(AccessKeyId=access_key_id)
+            last_used_date = last_used_info["AccessKeyLastUsed"].get("LastUsedDate")
+
+            if last_used_date:
+                unused_days = (datetime.now(timezone.utc) - last_used_date).days
+
+                if unused_days >= days_threshold:
+                    print(f"[FAIL] {user_name} - {unused_days}일 미사용")
+                    results.append({
+                        "item": "IAM Access Key Unused",
+                        "target": user_name,
+                        "risk": "Medium",
+                        "status": "Fail",
+                        "kisa_code": "KISA-CLD-11",
+                        "detail": f"{unused_days}일 동안 사용되지 않음"
+                    })
+                else:
+                    print(f"[PASS] {user_name} - 최근 사용됨")
+                    results.append({
+                        "item": "IAM Access Key Unused",
+                        "target": user_name,
+                        "risk": "Low",
+                        "status": "Pass",
+                        "kisa_code": "KISA-CLD-11",
+                        "detail": "최근 사용됨"
+                    })
+
+    return results
+
+def check_iam_admin_users():
+    import boto3
+
+    iam = boto3.client("iam")
+    results = []
+
+    print("\n=== IAM 관리자 권한 사용자 점검 결과 ===")
+
+    users = iam.list_users()["Users"]
+
+    for user in users:
+        user_name = user["UserName"]
+
+        attached_policies = iam.list_attached_user_policies(UserName=user_name)["AttachedPolicies"]
+
+        is_admin = False
+
+        for policy in attached_policies:
+            if policy["PolicyName"] == "AdministratorAccess":
+                is_admin = True
+                break
+
+        if is_admin:
+            print(f"[FAIL] {user_name} - 관리자 권한 보유")
+            results.append({
+                "item": "IAM Admin User",
+                "target": user_name,
+                "risk": "High",
+                "status": "Fail",
+                "kisa_code": "KISA-CLD-12",
+                "detail": f"{user_name} 사용자는 AdministratorAccess 권한을 가지고 있습니다."
+            })
+        else:
+            print(f"[PASS] {user_name} - 관리자 권한 없음")
+            results.append({
+                "item": "IAM Admin User",
+                "target": user_name,
+                "risk": "Low",
+                "status": "Pass",
+                "kisa_code": "KISA-CLD-12",
+                "detail": f"{user_name} 사용자는 관리자 권한이 없습니다."
+            })
+
+    return results
+
+

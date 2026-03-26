@@ -1,5 +1,12 @@
 import os
 import json
+#전체 포트 개방 검사
+from scanner.sg_checks import check_security_group_all_open
+#권한 사용자 검사
+from scanner.iam_checks import check_iam_admin_users
+
+#Access_key 검사
+from scanner.iam_checks import check_iam_access_key_unused
 
 #CloudTrail 검사
 from scanner.cloudtrail_checks import check_cloudtrail_enabled
@@ -21,6 +28,18 @@ from scoring.security_score import calculate_score
 
 def run_all_checks():
     results = []
+    # ======================
+    # 전체 포트 개방 검사
+    # ======================
+    results.extend(check_security_group_all_open())
+    # ======================
+    # 권한 사용자 검사
+    # ======================
+    results.extend(check_iam_admin_users())
+    # ======================
+    # Access_key 검사
+    # ======================
+    results.extend(check_iam_access_key_unused())
     # ======================
     # CloudTrail 검사
     # ======================
