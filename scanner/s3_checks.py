@@ -6,9 +6,21 @@ def check_s3_public_access():
     s3 = boto3.client("s3")
     results = []
 
+    print("\n=== S3 Public Access 점검 결과 ===")
+
     buckets = s3.list_buckets()["Buckets"]
 
-    print("\n=== S3 Public Access 점검 결과 ===")
+    if not buckets:
+        print("[INFO] S3 버킷이 없습니다.")
+        results.append({
+            "item": "S3 Public Access Block",
+            "target": "None",
+            "risk": "Low",
+            "status": "Pass",
+            "kisa_code": "KISA-CLD-01",
+            "detail": "점검할 S3 버킷이 없습니다."
+        })
+        return results
 
     for bucket in buckets:
         bucket_name = bucket["Name"]
@@ -51,6 +63,7 @@ def check_s3_public_access():
 
     return results
 
+
 def check_s3_bucket_encryption():
     s3 = boto3.client("s3")
     results = []
@@ -58,6 +71,18 @@ def check_s3_bucket_encryption():
     print("\n=== S3 버킷 암호화 점검 결과 ===")
 
     buckets = s3.list_buckets()["Buckets"]
+
+    if not buckets:
+        print("[INFO] S3 버킷이 없습니다.")
+        results.append({
+            "item": "S3 Bucket Encryption",
+            "target": "None",
+            "risk": "Low",
+            "status": "Pass",
+            "kisa_code": "KISA-CLD-05",
+            "detail": "점검할 S3 버킷이 없습니다."
+        })
+        return results
 
     for bucket in buckets:
         bucket_name = bucket["Name"]
@@ -87,6 +112,7 @@ def check_s3_bucket_encryption():
 
     return results
 
+
 def check_s3_bucket_versioning():
     s3 = boto3.client("s3")
     results = []
@@ -94,6 +120,18 @@ def check_s3_bucket_versioning():
     print("\n=== S3 버킷 버전 관리 점검 결과 ===")
 
     buckets = s3.list_buckets()["Buckets"]
+
+    if not buckets:
+        print("[INFO] S3 버킷이 없습니다.")
+        results.append({
+            "item": "S3 Bucket Versioning",
+            "target": "None",
+            "risk": "Low",
+            "status": "Pass",
+            "kisa_code": "KISA-CLD-06",
+            "detail": "점검할 S3 버킷이 없습니다."
+        })
+        return results
 
     for bucket in buckets:
         bucket_name = bucket["Name"]
