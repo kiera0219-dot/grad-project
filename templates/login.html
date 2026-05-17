@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>로그인</title>
+</head>
+<body>
+    <h1>로그인</h1>
+
+    {% if error %}
+    <p style="color:red">{{ error }}</p>
+    {% endif %}
+
+    <form method="POST">
+        <input name="username" placeholder="아이디"><br><br>
+        <input name="password" type="password" placeholder="비밀번호"><br><br>
+        <button>로그인</button>
+    </form>
+
+    <p>admin / 1234</p>
+</body>
+</html>
