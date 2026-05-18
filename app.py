@@ -1,557 +1,205 @@
 from flask import Flask, request, render_template_string, send_file
 import boto3
-from botocore.exceptions import ClientError, NoCredentialsError
+from botocore.exceptions import NoCredentialsError
 import json
 import subprocess
 import sys
+import os
 from pathlib import Path
+
 
 app = Flask(__name__)
 app.secret_key = "change-this-secret-key"
 
+
 # =========================
 # 경로 설정
 # =========================
-OUTPUT_DIR = Path("outputs")
+BASE_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = BASE_DIR / "outputs"
 SCAN_RESULT_PATH = OUTPUT_DIR / "scan_result.json"
 REPORT_MD_PATH = OUTPUT_DIR / "security_report.md"
 REPORT_PDF_PATH = OUTPUT_DIR / "security_report.pdf"
 
-# =========================
-# 공통 유틸
-# =========================
-def make_result(service, check, status, score, message):
-    return {
-        "service": service,
-        "check": check,
-        "status": status,
-        "score": score,
-        "message": message
-    }
-
-def error_result(service, check, error):
-    return {
-        "service": service,
-        "check": check,
-        "status": "ERROR",
-        "score": 0,
-        "message": str(error)
-    }
 
 # =========================
-# AWS 보안 점검 함수
+# 전체 스캐너 모듈 설정
 # =========================
-def check_iam_admin_users(session):
-    iam = session.client("iam")
+SCANNER_MODULE = "scanner.main_scanner"
 
-    try:
-        users = iam.list_users().get("Users", [])
-        admin_users = []
-
-        for user in users:
-            username = user["UserName"]
-
-            attached_policies = iam.list_attached_user_policies(
-                UserName=username
-            ).get("AttachedPolicies", [])
-
-            for policy in attached_policies:
-                if policy.get("PolicyName") == "AdministratorAccess":
-                    admin_users.append(username)
-
-        if admin_users:
-            return make_result(
-                "IAM",
-                "IAM 관리자 권한 사용자 점검",
-                "FAIL",
-                0,
-                f"AdministratorAccess 권한 사용자: {', '.join(admin_users)}"
-            )
-
-        return make_result(
-            "IAM",
-            "IAM 관리자 권한 사용자 점검",
-            "PASS",
-            10,
-            "AdministratorAccess 권한을 가진 IAM 사용자가 없습니다."
-        )
-
-    except ClientError as e:
-        return error_result("IAM", "IAM 관리자 권한 사용자 점검", e)
-
-def check_iam_mfa(session):
-    iam = session.client("iam")
-
-    try:
-        users = iam.list_users().get("Users", [])
-
-        if not users:
-            return make_result(
-                "IAM",
-                "IAM 사용자 MFA 설정 여부",
-                "PASS",
-                10,
-                "IAM 사용자가 없습니다."
-            )
-
-        no_mfa_users = []
-
-        for user in users:
-            username = user["UserName"]
-            mfa_devices = iam.list_mfa_devices(UserName=username).get("MFADevices", [])
-
-            if not mfa_devices:
-                no_mfa_users.append(username)
-
-        if no_mfa_users:
-            return make_result(
-                "IAM",
-                "IAM 사용자 MFA 설정 여부",
-                "FAIL",
-                0,
-                f"MFA 미설정 사용자: {', '.join(no_mfa_users)}"
-            )
-
-        return make_result(
-            "IAM",
-            "IAM 사용자 MFA 설정 여부",
-            "PASS",
-            10,
-            "모든 IAM 사용자에게 MFA가 설정되어 있습니다."
-        )
-
-    except ClientError as e:
-        return error_result("IAM", "IAM 사용자 MFA 설정 여부", e)
-
-def check_root_mfa(session):
-    iam = session.client("iam")
-
-    try:
-        summary = iam.get_account_summary().get("SummaryMap", {})
-        root_mfa_enabled = summary.get("AccountMFAEnabled", 0)
-
-        if root_mfa_enabled == 1:
-            return make_result(
-                "IAM",
-                "Root 계정 MFA 설정 여부",
-                "PASS",
-                10,
-                "Root 계정에 MFA가 설정되어 있습니다."
-            )
-
-        return make_result(
-            "IAM",
-            "Root 계정 MFA 설정 여부",
-            "FAIL",
-            0,
-            "Root 계정에 MFA가 설정되어 있지 않습니다."
-        )
-
-    except ClientError as e:
-        return error_result("IAM", "Root 계정 MFA 설정 여부", e)
-
-def check_password_policy(session):
-    iam = session.client("iam")
-
-    try:
-        policy = iam.get_account_password_policy().get("PasswordPolicy", {})
-
-        min_length = policy.get("MinimumPasswordLength", 0)
-        require_symbols = policy.get("RequireSymbols", False)
-        require_numbers = policy.get("RequireNumbers", False)
-        require_uppercase = policy.get("RequireUppercaseCharacters", False)
-        require_lowercase = policy.get("RequireLowercaseCharacters", False)
-
-        if (
-            min_length >= 8
-            and require_symbols
-            and require_numbers
-            and require_uppercase
-            and require_lowercase
-        ):
-            return make_result(
-                "IAM",
-                "계정 비밀번호 정책 설정",
-                "PASS",
-                10,
-                "비밀번호 정책이 적절하게 설정되어 있습니다."
-            )
-
-        return make_result(
-            "IAM",
-            "계정 비밀번호 정책 설정",
-            "FAIL",
-            0,
-            "비밀번호 길이, 대소문자, 숫자, 특수문자 정책이 부족합니다."
-        )
-
-    except ClientError as e:
-        return make_result(
-            "IAM",
-            "계정 비밀번호 정책 설정",
-            "FAIL",
-            0,
-            f"비밀번호 정책이 설정되어 있지 않거나 확인할 수 없습니다: {e}"
-        )
-
-def check_s3_public_access(session):
-    s3 = session.client("s3")
-
-    try:
-        buckets = s3.list_buckets().get("Buckets", [])
-
-        if not buckets:
-            return make_result(
-                "S3",
-                "S3 버킷 퍼블릭 접근 차단",
-                "PASS",
-                10,
-                "S3 버킷이 없습니다."
-            )
-
-        weak_buckets = []
-
-        for bucket in buckets:
-            bucket_name = bucket["Name"]
-
-            try:
-                block = s3.get_public_access_block(Bucket=bucket_name)
-                config = block.get("PublicAccessBlockConfiguration", {})
-
-                if not all([
-                    config.get("BlockPublicAcls", False),
-                    config.get("IgnorePublicAcls", False),
-                    config.get("BlockPublicPolicy", False),
-                    config.get("RestrictPublicBuckets", False),
-                ]):
-                    weak_buckets.append(bucket_name)
-
-            except ClientError:
-                weak_buckets.append(bucket_name)
-
-        if weak_buckets:
-            return make_result(
-                "S3",
-                "S3 버킷 퍼블릭 접근 차단",
-                "FAIL",
-                0,
-                f"퍼블릭 접근 차단 미흡 버킷: {', '.join(weak_buckets)}"
-            )
-
-        return make_result(
-            "S3",
-            "S3 버킷 퍼블릭 접근 차단",
-            "PASS",
-            10,
-            "모든 S3 버킷의 퍼블릭 접근 차단이 설정되어 있습니다."
-        )
-
-    except ClientError as e:
-        return error_result("S3", "S3 버킷 퍼블릭 접근 차단", e)
-
-def check_s3_encryption(session):
-    s3 = session.client("s3")
-
-    try:
-        buckets = s3.list_buckets().get("Buckets", [])
-
-        if not buckets:
-            return make_result(
-                "S3",
-                "S3 버킷 암호화 설정",
-                "PASS",
-                10,
-                "S3 버킷이 없습니다."
-            )
-
-        unencrypted_buckets = []
-
-        for bucket in buckets:
-            bucket_name = bucket["Name"]
-
-            try:
-                s3.get_bucket_encryption(Bucket=bucket_name)
-            except ClientError:
-                unencrypted_buckets.append(bucket_name)
-
-        if unencrypted_buckets:
-            return make_result(
-                "S3",
-                "S3 버킷 암호화 설정",
-                "FAIL",
-                0,
-                f"암호화 미설정 버킷: {', '.join(unencrypted_buckets)}"
-            )
-
-        return make_result(
-            "S3",
-            "S3 버킷 암호화 설정",
-            "PASS",
-            10,
-            "모든 S3 버킷에 암호화가 설정되어 있습니다."
-        )
-
-    except ClientError as e:
-        return error_result("S3", "S3 버킷 암호화 설정", e)
-
-def check_security_group_ssh_open(session):
-    ec2 = session.client("ec2")
-
-    try:
-        groups = ec2.describe_security_groups().get("SecurityGroups", [])
-        risky_groups = []
-
-        for group in groups:
-            group_name = group.get("GroupName", "")
-            group_id = group.get("GroupId", "")
-
-            for rule in group.get("IpPermissions", []):
-                from_port = rule.get("FromPort")
-                to_port = rule.get("ToPort")
-
-                if from_port is None or to_port is None:
-                    continue
-
-                for ip_range in rule.get("IpRanges", []):
-                    cidr = ip_range.get("CidrIp")
-
-                    if cidr == "0.0.0.0/0" and from_port <= 22 <= to_port:
-                        risky_groups.append(f"{group_name}({group_id})")
-
-        if risky_groups:
-            return make_result(
-                "Security Group",
-                "SSH 22번 포트 전체 공개 여부",
-                "FAIL",
-                0,
-                f"SSH가 전체 공개된 보안 그룹: {', '.join(risky_groups)}"
-            )
-
-        return make_result(
-            "Security Group",
-            "SSH 22번 포트 전체 공개 여부",
-            "PASS",
-            10,
-            "SSH 포트가 전체 공개되어 있지 않습니다."
-        )
-
-    except ClientError as e:
-        return error_result("Security Group", "SSH 22번 포트 전체 공개 여부", e)
-
-def check_rds_public_access(session):
-    rds = session.client("rds")
-
-    try:
-        instances = rds.describe_db_instances().get("DBInstances", [])
-
-        if not instances:
-            return make_result(
-                "RDS",
-                "RDS 퍼블릭 접근 여부",
-                "PASS",
-                10,
-                "RDS 인스턴스가 없습니다."
-            )
-
-        public_instances = []
-
-        for db in instances:
-            if db.get("PubliclyAccessible", False):
-                public_instances.append(db.get("DBInstanceIdentifier"))
-
-        if public_instances:
-            return make_result(
-                "RDS",
-                "RDS 퍼블릭 접근 여부",
-                "FAIL",
-                0,
-                f"퍼블릭 접근 가능한 RDS: {', '.join(public_instances)}"
-            )
-
-        return make_result(
-            "RDS",
-            "RDS 퍼블릭 접근 여부",
-            "PASS",
-            10,
-            "퍼블릭 접근 가능한 RDS가 없습니다."
-        )
-
-    except ClientError as e:
-        return error_result("RDS", "RDS 퍼블릭 접근 여부", e)
-
-def check_cloudtrail_enabled(session):
-    cloudtrail = session.client("cloudtrail")
-
-    try:
-        trails = cloudtrail.describe_trails().get("trailList", [])
-
-        if not trails:
-            return make_result(
-                "CloudTrail",
-                "CloudTrail 활성화 여부",
-                "FAIL",
-                0,
-                "CloudTrail이 생성되어 있지 않습니다."
-            )
-
-        return make_result(
-            "CloudTrail",
-            "CloudTrail 활성화 여부",
-            "PASS",
-            10,
-            "CloudTrail이 생성되어 있습니다."
-        )
-
-    except ClientError as e:
-        return error_result("CloudTrail", "CloudTrail 활성화 여부", e)
-
-def run_security_scan(session):
-    results = []
-
-    results.append(check_iam_admin_users(session))
-    results.append(check_iam_mfa(session))
-    results.append(check_root_mfa(session))
-    results.append(check_password_policy(session))
-    results.append(check_s3_public_access(session))
-    results.append(check_s3_encryption(session))
-    results.append(check_security_group_ssh_open(session))
-    results.append(check_rds_public_access(session))
-    results.append(check_cloudtrail_enabled(session))
-
-    return results
 
 # =========================
-# 리포팅 시스템 연동
+# 공통 실행 함수
 # =========================
-def convert_to_reporting_item(result):
-    check = result.get("check", "")
-    service = result.get("service", "")
-    message = result.get("message", "")
-    status = result.get("status", "")
-
-    mapping = {
-        "IAM 관리자 권한 사용자 점검": {
-            "item": "IAM Admin User",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-12"
-        },
-        "IAM 사용자 MFA 설정 여부": {
-            "item": "IAM User MFA Enabled",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-02"
-        },
-        "Root 계정 MFA 설정 여부": {
-            "item": "Root Account MFA Enabled",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-02"
-        },
-        "계정 비밀번호 정책 설정": {
-            "item": "IAM Password Policy",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-09"
-        },
-        "S3 버킷 퍼블릭 접근 차단": {
-            "item": "S3 Public Access Block",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-01"
-        },
-        "S3 버킷 암호화 설정": {
-            "item": "S3 Bucket Encryption",
-            "risk": "Medium",
-            "kisa_code": "KISA-CLD-05"
-        },
-        "SSH 22번 포트 전체 공개 여부": {
-            "item": "Security Group SSH Open",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-03"
-        },
-        "RDS 퍼블릭 접근 여부": {
-            "item": "RDS Public Access",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-04"
-        },
-        "CloudTrail 활성화 여부": {
-            "item": "CloudTrail Enabled",
-            "risk": "High",
-            "kisa_code": "KISA-CLD-08"
-        },
-    }
-
-    info = mapping.get(check, {
-        "item": check,
-        "risk": "Medium",
-        "kisa_code": "UNKNOWN"
-    })
-
-    converted_status = "Pass" if status == "PASS" else "Fail"
-
-    return {
-        "item": info["item"],
-        "target": service,
-        "risk": info["risk"],
-        "status": converted_status,
-        "kisa_code": info["kisa_code"],
-        "detail": message
-    }
-
-def save_scan_result_for_reporting(results):
-    converted_results = [
-        convert_to_reporting_item(result)
-        for result in results
-    ]
-
-    total_checks = len(converted_results)
-    pass_count = sum(1 for item in converted_results if item["status"] == "Pass")
-    fail_count = sum(1 for item in converted_results if item["status"] == "Fail")
-
-    security_score = int((pass_count / total_checks) * 100) if total_checks else 0
-
-    scan_result = {
-        "summary": {
-            "total_checks": total_checks,
-            "pass_count": pass_count,
-            "fail_count": fail_count,
-            "security_score": security_score
-        },
-        "results": converted_results
-    }
-
-    OUTPUT_DIR.mkdir(exist_ok=True)
-
-    with open(SCAN_RESULT_PATH, "w", encoding="utf-8") as f:
-        json.dump(scan_result, f, ensure_ascii=False, indent=2)
-
-    return scan_result
-
 def run_script(script_path):
     result = subprocess.run(
         [sys.executable, script_path],
+        cwd=BASE_DIR,
         capture_output=True,
         text=True,
-        encoding="utf-8"
+        encoding="utf-8",
+        errors="replace"
     )
 
     if result.returncode != 0:
+        stdout = result.stdout if result.stdout else "(출력 없음)"
+        stderr = result.stderr if result.stderr else "(에러 출력 없음)"
+
         raise RuntimeError(
             f"{script_path} 실행 실패\n\n"
-            f"STDOUT:\n{result.stdout}\n\n"
-            f"STDERR:\n{result.stderr}"
+            f"STDOUT:\n{stdout}\n\n"
+            f"STDERR:\n{stderr}"
         )
 
     return result.stdout
+
+
+def run_module_with_aws_credentials(module_name, access_key, secret_key, region):
+    env = os.environ.copy()
+    env["AWS_ACCESS_KEY_ID"] = access_key
+    env["AWS_SECRET_ACCESS_KEY"] = secret_key
+    env["AWS_DEFAULT_REGION"] = region
+    env["AWS_REGION"] = region
+
+    result = subprocess.run(
+        [sys.executable, "-m", module_name],
+        cwd=BASE_DIR,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env
+    )
+
+    if result.returncode != 0:
+        stdout = result.stdout if result.stdout else "(출력 없음)"
+        stderr = result.stderr if result.stderr else "(에러 출력 없음)"
+
+        raise RuntimeError(
+            f"{module_name} 실행 실패\n\n"
+            f"STDOUT:\n{stdout}\n\n"
+            f"STDERR:\n{stderr}"
+        )
+
+    return result.stdout
+
+
+# =========================
+# 결과 정규화 함수
+# =========================
+def normalize_status(status):
+    status = str(status).strip().upper()
+
+    if status == "PASS":
+        return "Pass"
+
+    if status == "FAIL":
+        return "Fail"
+
+    if status == "INFO":
+        return "INFO"
+
+    return "INFO"
+
+
+def recompute_summary(results, original_score=None):
+    normalized_results = []
+
+    for item in results:
+        fixed = dict(item)
+        fixed["status"] = normalize_status(fixed.get("status"))
+        normalized_results.append(fixed)
+
+    total_checks = len(normalized_results)
+
+    pass_count = sum(
+        1 for item in normalized_results
+        if item.get("status") == "Pass"
+    )
+
+    fail_count = sum(
+        1 for item in normalized_results
+        if item.get("status") == "Fail"
+    )
+
+    info_count = sum(
+        1 for item in normalized_results
+        if item.get("status") == "INFO"
+    )
+
+    # scanner의 점수가 정상이라면 그대로 사용
+    if isinstance(original_score, (int, float)) and original_score > 0:
+        security_score = int(original_score)
+
+    # scanner 점수가 0인데 PASS가 있으면 화면 표시용 점수 재계산
+    else:
+        score_target_count = pass_count + fail_count
+
+        if score_target_count > 0:
+            security_score = int((pass_count / score_target_count) * 100)
+        else:
+            security_score = 0
+
+    summary = {
+        "total_checks": total_checks,
+        "pass_count": pass_count,
+        "fail_count": fail_count,
+        "info_count": info_count,
+        "security_score": security_score
+    }
+
+    return summary, normalized_results
+
+
+def load_and_fix_scan_result():
+    if not SCAN_RESULT_PATH.exists():
+        raise FileNotFoundError(
+            "outputs/scan_result.json 파일이 없습니다."
+        )
+
+    with open(SCAN_RESULT_PATH, "r", encoding="utf-8") as f:
+        scan_result = json.load(f)
+
+    results = scan_result.get("results", [])
+    old_summary = scan_result.get("summary", {})
+    original_score = old_summary.get("security_score")
+
+    summary, fixed_results = recompute_summary(
+        results,
+        original_score=original_score
+    )
+
+    fixed_scan_result = {
+        "summary": summary,
+        "results": fixed_results
+    }
+
+    with open(SCAN_RESULT_PATH, "w", encoding="utf-8") as f:
+        json.dump(
+            fixed_scan_result,
+            f,
+            ensure_ascii=False,
+            indent=2
+        )
+
+    return fixed_scan_result
+
 
 def generate_security_report():
     run_script("reporting/enrich_findings.py")
     run_script("reporting/generate_report.py")
     run_script("reporting/generate_pdf.py")
 
+
 def load_report_markdown():
     if REPORT_MD_PATH.exists():
         return REPORT_MD_PATH.read_text(encoding="utf-8")
+
     return ""
 
+
 # =========================
-# 웹 화면
+# 메인 화면
 # =========================
 @app.route("/")
 def index():
@@ -595,6 +243,7 @@ def index():
                 border: 1px solid #d1d5db;
                 border-radius: 8px;
                 font-size: 15px;
+                box-sizing: border-box;
             }
 
             button {
@@ -607,6 +256,10 @@ def index():
                 border-radius: 10px;
                 font-size: 18px;
                 cursor: pointer;
+            }
+
+            button:hover {
+                background: #1d4ed8;
             }
 
             .notice {
@@ -643,13 +296,18 @@ def index():
             <div class="notice">
                 <strong>안내:</strong>
                 입력한 AWS 키는 서버에 저장하지 않고 점검 요청 처리에만 사용됩니다.
-                점검 후 자동으로 자연어 리포트와 PDF 리포트가 생성됩니다.
+                점검 후 <strong>scanner/main_scanner.py</strong> 전체 점검 결과를 기반으로
+                자연어 리포트와 PDF 리포트가 생성됩니다.
             </div>
         </div>
     </body>
     </html>
     """)
 
+
+# =========================
+# 점검 실행
+# =========================
 @app.route("/scan", methods=["POST"])
 def scan():
     access_key = request.form.get("access_key")
@@ -658,25 +316,33 @@ def scan():
 
     report_error = None
     report_md = ""
+    scan_result = None
+    results = []
 
     try:
+        # 1. AWS 자격 증명 확인
         aws_session = boto3.Session(
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             region_name=region
         )
 
-        # 자격 증명 확인
         sts = aws_session.client("sts")
         sts.get_caller_identity()
 
-        # 1. AWS 자동 보안 점검
-        results = run_security_scan(aws_session)
+        # 2. scanner/main_scanner.py 전체 점검 실행
+        run_module_with_aws_credentials(
+            SCANNER_MODULE,
+            access_key,
+            secret_key,
+            region
+        )
 
-        # 2. 네 리포트 로직 입력 파일 생성
-        save_scan_result_for_reporting(results)
+        # 3. scan_result.json 읽고 상태값/점수 정리 후 다시 저장
+        scan_result = load_and_fix_scan_result()
+        results = scan_result.get("results", [])
 
-        # 3. 네 리포팅 파이프라인 실행
+        # 4. 리포트 생성
         try:
             generate_security_report()
             report_md = load_report_markdown()
@@ -689,13 +355,13 @@ def scan():
     except Exception as e:
         return f"<h2>점검 중 오류 발생</h2><pre>{str(e)}</pre>"
 
-    total_score = sum(item["score"] for item in results)
-    max_score = len(results) * 10
-    percent = round((total_score / max_score) * 100, 1) if max_score else 0
+    summary = scan_result.get("summary", {})
 
-    pass_count = sum(1 for item in results if item["status"] == "PASS")
-    fail_count = sum(1 for item in results if item["status"] == "FAIL")
-    error_count = sum(1 for item in results if item["status"] == "ERROR")
+    total_checks = summary.get("total_checks", len(results))
+    pass_count = summary.get("pass_count", 0)
+    fail_count = summary.get("fail_count", 0)
+    info_count = summary.get("info_count", 0)
+    security_score = summary.get("security_score", 0)
 
     pdf_exists = REPORT_PDF_PATH.exists()
 
@@ -759,6 +425,7 @@ def scan():
                 padding: 15px;
                 border-bottom: 1px solid #e5e7eb;
                 text-align: center;
+                font-size: 14px;
             }
 
             th {
@@ -766,18 +433,18 @@ def scan():
                 color: white;
             }
 
-            .PASS {
+            .Pass {
                 color: #16a34a;
                 font-weight: bold;
             }
 
-            .FAIL {
+            .Fail {
                 color: #dc2626;
                 font-weight: bold;
             }
 
-            .ERROR {
-                color: #d97706;
+            .INFO {
+                color: #2563eb;
                 font-weight: bold;
             }
 
@@ -835,10 +502,14 @@ def scan():
                 <h1>AWS 보안 점검 리포트</h1>
                 <p>Region: {{ region }}</p>
 
-                <div class="score">{{ total_score }} / {{ max_score }}점</div>
-                <p>보안 준수율: {{ percent }}%</p>
+                <div class="score">{{ security_score }} / 100점</div>
+                <p>보안 점수: {{ security_score }}점</p>
 
                 <div class="cards">
+                    <div class="card">
+                        <h3>전체 점검</h3>
+                        <p>{{ total_checks }}개</p>
+                    </div>
                     <div class="card">
                         <h3>PASS</h3>
                         <p>{{ pass_count }}개</p>
@@ -848,8 +519,8 @@ def scan():
                         <p>{{ fail_count }}개</p>
                     </div>
                     <div class="card">
-                        <h3>ERROR</h3>
-                        <p>{{ error_count }}개</p>
+                        <h3>INFO</h3>
+                        <p>{{ info_count }}개</p>
                     </div>
                 </div>
             </div>
@@ -869,21 +540,23 @@ def scan():
             <table>
                 <thead>
                     <tr>
-                        <th>서비스</th>
                         <th>점검 항목</th>
+                        <th>대상</th>
+                        <th>위험도</th>
                         <th>상태</th>
-                        <th>점수</th>
+                        <th>KISA 코드</th>
                         <th>상세 내용</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in results %}
                     <tr>
-                        <td>{{ item.service }}</td>
-                        <td>{{ item.check }}</td>
+                        <td>{{ item.item }}</td>
+                        <td>{{ item.target }}</td>
+                        <td>{{ item.risk }}</td>
                         <td class="{{ item.status }}">{{ item.status }}</td>
-                        <td>{{ item.score }}</td>
-                        <td>{{ item.message }}</td>
+                        <td>{{ item.kisa_code }}</td>
+                        <td>{{ item.detail }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
@@ -904,17 +577,20 @@ def scan():
     </html>
     """,
     results=results,
-    total_score=total_score,
-    max_score=max_score,
-    percent=percent,
+    total_checks=total_checks,
     pass_count=pass_count,
     fail_count=fail_count,
-    error_count=error_count,
+    info_count=info_count,
+    security_score=security_score,
     region=region,
     pdf_exists=pdf_exists,
     report_md=report_md,
     report_error=report_error)
 
+
+# =========================
+# PDF 다운로드
+# =========================
 @app.route("/download-report")
 def download_report():
     if not REPORT_PDF_PATH.exists():
@@ -926,6 +602,6 @@ def download_report():
         download_name="security_report.pdf"
     )
 
+
 if __name__ == "__main__":
     app.run(debug=True)
-
