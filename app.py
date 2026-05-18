@@ -1,9 +1,68 @@
 from flask import Flask, request, render_template_string
 import boto3
+import os
+import json
+import google.generativeai as genai
+from dotenv import load_dotenv
 from botocore.exceptions import ClientError, NoCredentialsError
+
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = "super-secret-key-change-this"
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+
+# =========================
+# Gemini 자연어 리포트 생성
+# =========================
+def generate_gemini_report(results, total_score, max_score, percent):
+    if not GEMINI_API_KEY:
+        return """
+Gemini API Key가 설정되어 있지 않아 기본 요약을 출력합니다.
+
+AWS 보안 점검 결과를 기준으로 PASS 항목은 양호한 설정이며,
+FAIL 항목은 보안상 개선이 필요한 항목입니다.
+ERROR 항목은 AWS 권한 또는 리전 설정 문제일 수 있으므로 확인이 필요합니다.
+"""
+
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+
+        model = genai.GenerativeModel("gemini-1.5-flash")
+
+        prompt = f"""
+너는 AWS 클라우드 보안 점검 보고서를 작성하는 보안 컨설턴트야.
+
+아래는 사용자가 입력한 AWS 환경을 코드로 점검한 결과야.
+점검 결과를 바탕으로 한국어 자연어 리포트를 작성해줘.
+
+총점: {total_score}/{max_score}
+보안 준수율: {percent}%
+
+점검 결과:
+{json.dumps(results, ensure_ascii=False, indent=2)}
+
+아래 형식으로 작성해줘.
+
+1. 전체 보안 상태 요약
+2. 주요 취약점 요약
+3. 위험도가 높은 항목
+4. 개선 조치 제안
+5. 발표용 한 문단 요약
+
+조건:
+- 실제 점검 결과에 없는 내용은 지어내지 말 것
+- PASS, FAIL, ERROR를 구분해서 설명할 것
+- 졸업작품 발표에 사용할 수 있게 자연스럽게 작성할 것
+"""
+
+        response = model.generate_content(prompt)
+        return response.text
+
+    except Exception as e:
+        return f"Gemini 자연어 리포트 생성 중 오류가 발생했습니다.\n\n{str(e)}"
 
 
 # =========================
@@ -14,6 +73,7 @@ def check_iam_mfa(session):
 
     try:
         users = iam.list_users()["Users"]
+
         if not users:
             return {
                 "service": "IAM",
@@ -153,6 +213,16 @@ def check_s3_encryption(session):
 
     try:
         buckets = s3.list_buckets()["Buckets"]
+
+        if not buckets:
+            return {
+                "service": "S3",
+                "check": "S3 버킷 암호화 설정",
+                "status": "PASS",
+                "score": 10,
+                "message": "S3 버킷이 없습니다."
+            }
+
         unencrypted_buckets = []
 
         for bucket in buckets:
@@ -199,6 +269,9 @@ def check_security_group_ssh_open(session):
                 from_port = rule.get("FromPort")
                 to_port = rule.get("ToPort")
 
+                if from_port is None or to_port is None:
+                    continue
+
                 for ip_range in rule.get("IpRanges", []):
                     cidr = ip_range.get("CidrIp")
 
@@ -224,14 +297,6 @@ def check_security_group_ssh_open(session):
 
     except ClientError as e:
         return error_result("Security Group", "SSH 22번 포트 전체 공개 여부", e)
-    except TypeError:
-        return {
-            "service": "Security Group",
-            "check": "SSH 22번 포트 전체 공개 여부",
-            "status": "PASS",
-            "score": 10,
-            "message": "SSH 포트 전체 공개 규칙이 발견되지 않았습니다."
-        }
 
 
 def check_rds_public_access(session):
@@ -393,6 +458,7 @@ def index():
                 border-radius: 8px;
                 color: #92400e;
                 font-size: 14px;
+                line-height: 1.6;
             }
         </style>
     </head>
@@ -414,7 +480,8 @@ def index():
             </form>
 
             <div class="notice">
-                입력한 AWS 키는 서버에 저장하지 않고, 점검 요청 처리에만 사용됩니다.
+                입력한 AWS 키는 서버에 저장하지 않고, 점검 요청 처리에만 사용됩니다.<br>
+                점검 결과는 Gemini를 통해 자연어 리포트로 변환되어 함께 표시됩니다.
             </div>
         </div>
     </body>
@@ -443,13 +510,23 @@ def scan():
     except NoCredentialsError:
         return "<h2>AWS 자격 증명이 올바르지 않습니다.</h2>"
 
+    except Exception as e:
+        return f"<h2>점검 실행 중 오류 발생</h2><pre>{str(e)}</pre>"
+
     total_score = sum(item["score"] for item in results)
     max_score = len(results) * 10
-    percent = round((total_score / max_score) * 100, 1)
+    percent = round((total_score / max_score) * 100, 1) if max_score else 0
 
     pass_count = sum(1 for item in results if item["status"] == "PASS")
     fail_count = sum(1 for item in results if item["status"] == "FAIL")
     error_count = sum(1 for item in results if item["status"] == "ERROR")
+
+    gemini_report = generate_gemini_report(
+        results,
+        total_score,
+        max_score,
+        percent
+    )
 
     return render_template_string("""
     <!DOCTYPE html>
@@ -499,6 +576,16 @@ def scan():
                 padding: 20px;
                 border-radius: 12px;
                 text-align: center;
+            }
+
+            .gemini {
+                background: white;
+                padding: 30px;
+                border-radius: 16px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                margin-bottom: 30px;
+                line-height: 1.8;
+                white-space: pre-wrap;
             }
 
             table {
@@ -571,6 +658,11 @@ def scan():
                 </div>
             </div>
 
+            <div class="gemini">
+                <h2>Gemini 자연어 분석 리포트</h2>
+                {{ gemini_report }}
+            </div>
+
             <table>
                 <thead>
                     <tr>
@@ -606,7 +698,8 @@ def scan():
     pass_count=pass_count,
     fail_count=fail_count,
     error_count=error_count,
-    region=region)
+    region=region,
+    gemini_report=gemini_report)
 
 
 if __name__ == "__main__":
