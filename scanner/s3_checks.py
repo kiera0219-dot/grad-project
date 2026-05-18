@@ -15,10 +15,10 @@ def check_s3_public_access():
         results.append({
             "item": "S3 Public Access Block",
             "target": "None",
-            "risk": "Low",
-            "status": "Pass",
+            "risk": "Info",
+            "status": "INFO",
             "kisa_code": "KISA-CLD-01",
-            "detail": "점검할 S3 버킷이 없습니다."
+            "detail": "점검 대상 S3 버킷이 없습니다."
         })
         return results
 
@@ -34,8 +34,8 @@ def check_s3_public_access():
                 results.append({
                     "item": "S3 Public Access Block",
                     "target": bucket_name,
-                    "risk": "High",
-                    "status": "Pass",
+                    "risk": "Low",
+                    "status": "PASS",
                     "kisa_code": "KISA-CLD-01",
                     "detail": f"{bucket_name} 버킷은 Public Access Block이 활성화되어 있습니다."
                 })
@@ -45,7 +45,7 @@ def check_s3_public_access():
                     "item": "S3 Public Access Block",
                     "target": bucket_name,
                     "risk": "High",
-                    "status": "Fail",
+                    "status": "FAIL",
                     "kisa_code": "KISA-CLD-01",
                     "detail": f"{bucket_name} 버킷은 Public Access Block 설정이 미흡합니다."
                 })
@@ -56,7 +56,7 @@ def check_s3_public_access():
                 "item": "S3 Public Access Block",
                 "target": bucket_name,
                 "risk": "High",
-                "status": "Fail",
+                "status": "FAIL",
                 "kisa_code": "KISA-CLD-01",
                 "detail": f"{bucket_name} 버킷의 Public Access Block 설정을 확인할 수 없습니다."
             })
@@ -77,10 +77,10 @@ def check_s3_bucket_encryption():
         results.append({
             "item": "S3 Bucket Encryption",
             "target": "None",
-            "risk": "Low",
-            "status": "Pass",
+            "risk": "Info",
+            "status": "INFO",
             "kisa_code": "KISA-CLD-05",
-            "detail": "점검할 S3 버킷이 없습니다."
+            "detail": "점검 대상 S3 버킷이 없습니다."
         })
         return results
 
@@ -89,12 +89,13 @@ def check_s3_bucket_encryption():
 
         try:
             s3.get_bucket_encryption(Bucket=bucket_name)
+
             print(f"[PASS] {bucket_name} - 암호화 설정됨")
             results.append({
                 "item": "S3 Bucket Encryption",
                 "target": bucket_name,
-                "risk": "Medium",
-                "status": "Pass",
+                "risk": "Low",
+                "status": "PASS",
                 "kisa_code": "KISA-CLD-05",
                 "detail": f"{bucket_name} 버킷은 기본 암호화가 설정되어 있습니다."
             })
@@ -105,7 +106,7 @@ def check_s3_bucket_encryption():
                 "item": "S3 Bucket Encryption",
                 "target": bucket_name,
                 "risk": "Medium",
-                "status": "Fail",
+                "status": "FAIL",
                 "kisa_code": "KISA-CLD-05",
                 "detail": f"{bucket_name} 버킷은 기본 암호화가 설정되어 있지 않습니다."
             })
@@ -126,10 +127,10 @@ def check_s3_bucket_versioning():
         results.append({
             "item": "S3 Bucket Versioning",
             "target": "None",
-            "risk": "Low",
-            "status": "Pass",
+            "risk": "Info",
+            "status": "INFO",
             "kisa_code": "KISA-CLD-06",
-            "detail": "점검할 S3 버킷이 없습니다."
+            "detail": "점검 대상 S3 버킷이 없습니다."
         })
         return results
 
@@ -146,17 +147,18 @@ def check_s3_bucket_versioning():
                     "item": "S3 Bucket Versioning",
                     "target": bucket_name,
                     "risk": "Low",
-                    "status": "Pass",
+                    "status": "PASS",
                     "kisa_code": "KISA-CLD-06",
                     "detail": f"{bucket_name} 버킷은 버전 관리가 활성화되어 있습니다."
                 })
+
             else:
                 print(f"[FAIL] {bucket_name} - 버전 관리 비활성화")
                 results.append({
                     "item": "S3 Bucket Versioning",
                     "target": bucket_name,
-                    "risk": "Low",
-                    "status": "Fail",
+                    "risk": "Medium",
+                    "status": "FAIL",
                     "kisa_code": "KISA-CLD-06",
                     "detail": f"{bucket_name} 버킷은 버전 관리가 비활성화되어 있습니다."
                 })
@@ -166,8 +168,8 @@ def check_s3_bucket_versioning():
             results.append({
                 "item": "S3 Bucket Versioning",
                 "target": bucket_name,
-                "risk": "Low",
-                "status": "Fail",
+                "risk": "Medium",
+                "status": "FAIL",
                 "kisa_code": "KISA-CLD-06",
                 "detail": f"{bucket_name} 버킷의 버전 관리 상태를 확인할 수 없습니다."
             })

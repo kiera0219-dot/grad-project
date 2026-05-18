@@ -1,0 +1,194 @@
+{
+  "summary": {
+    "total_checks": 23,
+    "pass_count": 12,
+    "fail_count": 11,
+    "security_score": 54
+  },
+  "results": [
+    {
+      "item": "Security Group ALL Open",
+      "target": "default (sg-08c95652b3ad35458)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-13",
+      "detail": "default (sg-08c95652b3ad35458)은 전체 포트 개방이 없습니다."
+    },
+    {
+      "item": "Security Group ALL Open",
+      "target": "launch-wizard-1 (sg-0d8490523b4877531)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-13",
+      "detail": "launch-wizard-1 (sg-0d8490523b4877531)은 전체 포트 개방이 없습니다."
+    },
+    {
+      "item": "IAM Admin User",
+      "target": "admin",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-12",
+      "detail": "admin 사용자는 AdministratorAccess 권한을 가지고 있습니다."
+    },
+    {
+      "item": "IAM Admin User",
+      "target": "test1",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-12",
+      "detail": "test1 사용자는 AdministratorAccess 권한을 가지고 있습니다."
+    },
+    {
+      "item": "IAM Admin User",
+      "target": "test2",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-12",
+      "detail": "test2 사용자는 AdministratorAccess 권한을 가지고 있습니다."
+    },
+    {
+      "item": "IAM Admin User",
+      "target": "test3",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-12",
+      "detail": "test3 사용자는 AdministratorAccess 권한을 가지고 있습니다."
+    },
+    {
+      "item": "IAM Access Key Unused",
+      "target": "test1",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-11",
+      "detail": "최근 사용됨"
+    },
+    {
+      "item": "IAM Access Key Unused",
+      "target": "test2",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-11",
+      "detail": "최근 사용됨"
+    },
+    {
+      "item": "IAM Access Key Unused",
+      "target": "test3",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-11",
+      "detail": "최근 사용됨"
+    },
+    {
+      "item": "CloudTrail Enabled",
+      "target": "CloudTrail",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-08",
+      "detail": "설정된 CloudTrail 트레일이 없습니다."
+    },
+    {
+      "item": "Root Account MFA Enabled",
+      "target": "Root Account",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-08",
+      "detail": "루트 계정에 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM User MFA Enabled",
+      "target": "admin",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "admin 사용자는 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM User MFA Enabled",
+      "target": "test1",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "test1 사용자는 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM User MFA Enabled",
+      "target": "test2",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "test2 사용자는 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM User MFA Enabled",
+      "target": "test3",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "test3 사용자는 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM Password Policy",
+      "target": "Account",
+      "risk": "Medium",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-09",
+      "detail": "IAM 계정 비밀번호 정책이 설정되어 있지 않습니다."
+    },
+    {
+      "item": "S3 Public Access Block",
+      "target": "None",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-01",
+      "detail": "점검할 S3 버킷이 없습니다."
+    },
+    {
+      "item": "S3 Bucket Encryption",
+      "target": "None",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-05",
+      "detail": "점검할 S3 버킷이 없습니다."
+    },
+    {
+      "item": "S3 Bucket Versioning",
+      "target": "None",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-06",
+      "detail": "점검할 S3 버킷이 없습니다."
+    },
+    {
+      "item": "Security Group SSH Open",
+      "target": "default (sg-08c95652b3ad35458)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-03",
+      "detail": "default (sg-08c95652b3ad35458)는 22번 포트 전체 개방이 없습니다."
+    },
+    {
+      "item": "Security Group SSH Open",
+      "target": "launch-wizard-1 (sg-0d8490523b4877531)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-03",
+      "detail": "launch-wizard-1 (sg-0d8490523b4877531)는 22번 포트 전체 개방이 없습니다."
+    },
+    {
+      "item": "Security Group RDP Open",
+      "target": "default (sg-08c95652b3ad35458)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-07",
+      "detail": "default (sg-08c95652b3ad35458)는 3389번 포트 전체 개방이 없습니다."
+    },
+    {
+      "item": "Security Group RDP Open",
+      "target": "launch-wizard-1 (sg-0d8490523b4877531)",
+      "risk": "Low",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-07",
+      "detail": "launch-wizard-1 (sg-0d8490523b4877531)는 3389번 포트 전체 개방이 없습니다."
+    }
+  ]
+}
