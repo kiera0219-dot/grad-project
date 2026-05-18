@@ -1,0 +1,82 @@
+{
+  "summary": {
+    "total_checks": 9,
+    "pass_count": 3,
+    "fail_count": 6,
+    "security_score": 33
+  },
+  "results": [
+    {
+      "item": "IAM Admin User",
+      "target": "IAM",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-12",
+      "detail": "AdministratorAccess 권한 사용자: admin, test1, test2, test3"
+    },
+    {
+      "item": "IAM User MFA Enabled",
+      "target": "IAM",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "MFA 미설정 사용자: admin, test1, test2, test3"
+    },
+    {
+      "item": "Root Account MFA Enabled",
+      "target": "IAM",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-02",
+      "detail": "Root 계정에 MFA가 설정되어 있지 않습니다."
+    },
+    {
+      "item": "IAM Password Policy",
+      "target": "IAM",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-09",
+      "detail": "비밀번호 정책이 설정되어 있지 않거나 확인할 수 없습니다: An error occurred (NoSuchEntity) when calling the GetAccountPasswordPolicy operation: The Password Policy with domain name 365070925581 cannot be found."
+    },
+    {
+      "item": "S3 Public Access Block",
+      "target": "S3",
+      "risk": "High",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-01",
+      "detail": "S3 버킷이 없습니다."
+    },
+    {
+      "item": "S3 Bucket Encryption",
+      "target": "S3",
+      "risk": "Medium",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-05",
+      "detail": "S3 버킷이 없습니다."
+    },
+    {
+      "item": "Security Group SSH Open",
+      "target": "Security Group",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-03",
+      "detail": "SSH가 전체 공개된 보안 그룹: launch-wizard-2(sg-0505ccf9abb1ac83e), launch-wizard-3(sg-0e45a1198d66249e4)"
+    },
+    {
+      "item": "RDS Public Access",
+      "target": "RDS",
+      "risk": "High",
+      "status": "Pass",
+      "kisa_code": "KISA-CLD-04",
+      "detail": "RDS 인스턴스가 없습니다."
+    },
+    {
+      "item": "CloudTrail Enabled",
+      "target": "CloudTrail",
+      "risk": "High",
+      "status": "Fail",
+      "kisa_code": "KISA-CLD-08",
+      "detail": "CloudTrail이 생성되어 있지 않습니다."
+    }
+  ]
+}
