@@ -1,123 +1,168 @@
-from flask import Flask, request, render_template_string
+from flask import Flask, request, render_template_string, send_file
 import boto3
-import os
-import json
-import google.generativeai as genai
-from dotenv import load_dotenv
 from botocore.exceptions import ClientError, NoCredentialsError
+import json
+import subprocess
+import sys
+from pathlib import Path
 
-load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = "super-secret-key-change-this"
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+app.secret_key = "change-this-secret-key"
 
 
 # =========================
-# Gemini 자연어 리포트 생성
+# 경로 설정
 # =========================
-def generate_gemini_report(results, total_score, max_score, percent):
-    if not GEMINI_API_KEY:
-        return """
-Gemini API Key가 설정되어 있지 않아 기본 요약을 출력합니다.
+OUTPUT_DIR = Path("outputs")
+SCAN_RESULT_PATH = OUTPUT_DIR / "scan_result.json"
+REPORT_MD_PATH = OUTPUT_DIR / "security_report.md"
+REPORT_PDF_PATH = OUTPUT_DIR / "security_report.pdf"
 
-AWS 보안 점검 결과를 기준으로 PASS 항목은 양호한 설정이며,
-FAIL 항목은 보안상 개선이 필요한 항목입니다.
-ERROR 항목은 AWS 권한 또는 리전 설정 문제일 수 있으므로 확인이 필요합니다.
-"""
+
+# =========================
+# 공통 유틸
+# =========================
+def make_result(service, check, status, score, message):
+    return {
+        "service": service,
+        "check": check,
+        "status": status,
+        "score": score,
+        "message": message
+    }
+
+
+def error_result(service, check, error):
+    return {
+        "service": service,
+        "check": check,
+        "status": "ERROR",
+        "score": 0,
+        "message": str(error)
+    }
+
+
+# =========================
+# AWS 보안 점검 함수
+# =========================
+def check_iam_admin_users(session):
+    iam = session.client("iam")
 
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        users = iam.list_users().get("Users", [])
+        admin_users = []
 
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        for user in users:
+            username = user["UserName"]
 
-        prompt = f"""
-너는 AWS 클라우드 보안 점검 보고서를 작성하는 보안 컨설턴트야.
+            attached_policies = iam.list_attached_user_policies(
+                UserName=username
+            ).get("AttachedPolicies", [])
 
-아래는 사용자가 입력한 AWS 환경을 코드로 점검한 결과야.
-점검 결과를 바탕으로 한국어 자연어 리포트를 작성해줘.
+            for policy in attached_policies:
+                if policy.get("PolicyName") == "AdministratorAccess":
+                    admin_users.append(username)
 
-총점: {total_score}/{max_score}
-보안 준수율: {percent}%
+        if admin_users:
+            return make_result(
+                "IAM",
+                "IAM 관리자 권한 사용자 점검",
+                "FAIL",
+                0,
+                f"AdministratorAccess 권한 사용자: {', '.join(admin_users)}"
+            )
 
-점검 결과:
-{json.dumps(results, ensure_ascii=False, indent=2)}
+        return make_result(
+            "IAM",
+            "IAM 관리자 권한 사용자 점검",
+            "PASS",
+            10,
+            "AdministratorAccess 권한을 가진 IAM 사용자가 없습니다."
+        )
 
-아래 형식으로 작성해줘.
-
-1. 전체 보안 상태 요약
-2. 주요 취약점 요약
-3. 위험도가 높은 항목
-4. 개선 조치 제안
-5. 발표용 한 문단 요약
-
-조건:
-- 실제 점검 결과에 없는 내용은 지어내지 말 것
-- PASS, FAIL, ERROR를 구분해서 설명할 것
-- 졸업작품 발표에 사용할 수 있게 자연스럽게 작성할 것
-"""
-
-        response = model.generate_content(prompt)
-        return response.text
-
-    except Exception as e:
-        return f"Gemini 자연어 리포트 생성 중 오류가 발생했습니다.\n\n{str(e)}"
+    except ClientError as e:
+        return error_result("IAM", "IAM 관리자 권한 사용자 점검", e)
 
 
-# =========================
-# AWS 보안 점검 함수들
-# =========================
 def check_iam_mfa(session):
     iam = session.client("iam")
 
     try:
-        users = iam.list_users()["Users"]
+        users = iam.list_users().get("Users", [])
 
         if not users:
-            return {
-                "service": "IAM",
-                "check": "IAM 사용자 MFA 설정 여부",
-                "status": "PASS",
-                "score": 10,
-                "message": "IAM 사용자가 없습니다."
-            }
+            return make_result(
+                "IAM",
+                "IAM 사용자 MFA 설정 여부",
+                "PASS",
+                10,
+                "IAM 사용자가 없습니다."
+            )
 
         no_mfa_users = []
 
         for user in users:
             username = user["UserName"]
-            mfa_devices = iam.list_mfa_devices(UserName=username)["MFADevices"]
+            mfa_devices = iam.list_mfa_devices(UserName=username).get("MFADevices", [])
 
-            if len(mfa_devices) == 0:
+            if not mfa_devices:
                 no_mfa_users.append(username)
 
         if no_mfa_users:
-            return {
-                "service": "IAM",
-                "check": "IAM 사용자 MFA 설정 여부",
-                "status": "FAIL",
-                "score": 0,
-                "message": f"MFA 미설정 사용자: {', '.join(no_mfa_users)}"
-            }
+            return make_result(
+                "IAM",
+                "IAM 사용자 MFA 설정 여부",
+                "FAIL",
+                0,
+                f"MFA 미설정 사용자: {', '.join(no_mfa_users)}"
+            )
 
-        return {
-            "service": "IAM",
-            "check": "IAM 사용자 MFA 설정 여부",
-            "status": "PASS",
-            "score": 10,
-            "message": "모든 IAM 사용자에게 MFA가 설정되어 있습니다."
-        }
+        return make_result(
+            "IAM",
+            "IAM 사용자 MFA 설정 여부",
+            "PASS",
+            10,
+            "모든 IAM 사용자에게 MFA가 설정되어 있습니다."
+        )
 
     except ClientError as e:
         return error_result("IAM", "IAM 사용자 MFA 설정 여부", e)
+
+
+def check_root_mfa(session):
+    iam = session.client("iam")
+
+    try:
+        summary = iam.get_account_summary().get("SummaryMap", {})
+        root_mfa_enabled = summary.get("AccountMFAEnabled", 0)
+
+        if root_mfa_enabled == 1:
+            return make_result(
+                "IAM",
+                "Root 계정 MFA 설정 여부",
+                "PASS",
+                10,
+                "Root 계정에 MFA가 설정되어 있습니다."
+            )
+
+        return make_result(
+            "IAM",
+            "Root 계정 MFA 설정 여부",
+            "FAIL",
+            0,
+            "Root 계정에 MFA가 설정되어 있지 않습니다."
+        )
+
+    except ClientError as e:
+        return error_result("IAM", "Root 계정 MFA 설정 여부", e)
 
 
 def check_password_policy(session):
     iam = session.client("iam")
 
     try:
-        policy = iam.get_account_password_policy()["PasswordPolicy"]
+        policy = iam.get_account_password_policy().get("PasswordPolicy", {})
 
         min_length = policy.get("MinimumPasswordLength", 0)
         require_symbols = policy.get("RequireSymbols", False)
@@ -132,77 +177,83 @@ def check_password_policy(session):
             and require_uppercase
             and require_lowercase
         ):
-            return {
-                "service": "IAM",
-                "check": "계정 비밀번호 정책 설정",
-                "status": "PASS",
-                "score": 10,
-                "message": "비밀번호 정책이 적절하게 설정되어 있습니다."
-            }
+            return make_result(
+                "IAM",
+                "계정 비밀번호 정책 설정",
+                "PASS",
+                10,
+                "비밀번호 정책이 적절하게 설정되어 있습니다."
+            )
 
-        return {
-            "service": "IAM",
-            "check": "계정 비밀번호 정책 설정",
-            "status": "FAIL",
-            "score": 0,
-            "message": "비밀번호 길이, 대소문자, 숫자, 특수문자 정책이 부족합니다."
-        }
+        return make_result(
+            "IAM",
+            "계정 비밀번호 정책 설정",
+            "FAIL",
+            0,
+            "비밀번호 길이, 대소문자, 숫자, 특수문자 정책이 부족합니다."
+        )
 
     except ClientError as e:
-        return error_result("IAM", "계정 비밀번호 정책 설정", e)
+        return make_result(
+            "IAM",
+            "계정 비밀번호 정책 설정",
+            "FAIL",
+            0,
+            f"비밀번호 정책이 설정되어 있지 않거나 확인할 수 없습니다: {e}"
+        )
 
 
 def check_s3_public_access(session):
     s3 = session.client("s3")
 
     try:
-        buckets = s3.list_buckets()["Buckets"]
+        buckets = s3.list_buckets().get("Buckets", [])
 
         if not buckets:
-            return {
-                "service": "S3",
-                "check": "S3 버킷 퍼블릭 접근 차단",
-                "status": "PASS",
-                "score": 10,
-                "message": "S3 버킷이 없습니다."
-            }
+            return make_result(
+                "S3",
+                "S3 버킷 퍼블릭 접근 차단",
+                "PASS",
+                10,
+                "S3 버킷이 없습니다."
+            )
 
-        public_buckets = []
+        weak_buckets = []
 
         for bucket in buckets:
             bucket_name = bucket["Name"]
 
             try:
                 block = s3.get_public_access_block(Bucket=bucket_name)
-                config = block["PublicAccessBlockConfiguration"]
+                config = block.get("PublicAccessBlockConfiguration", {})
 
                 if not all([
                     config.get("BlockPublicAcls", False),
                     config.get("IgnorePublicAcls", False),
                     config.get("BlockPublicPolicy", False),
-                    config.get("RestrictPublicBuckets", False)
+                    config.get("RestrictPublicBuckets", False),
                 ]):
-                    public_buckets.append(bucket_name)
+                    weak_buckets.append(bucket_name)
 
             except ClientError:
-                public_buckets.append(bucket_name)
+                weak_buckets.append(bucket_name)
 
-        if public_buckets:
-            return {
-                "service": "S3",
-                "check": "S3 버킷 퍼블릭 접근 차단",
-                "status": "FAIL",
-                "score": 0,
-                "message": f"퍼블릭 접근 차단 미흡 버킷: {', '.join(public_buckets)}"
-            }
+        if weak_buckets:
+            return make_result(
+                "S3",
+                "S3 버킷 퍼블릭 접근 차단",
+                "FAIL",
+                0,
+                f"퍼블릭 접근 차단 미흡 버킷: {', '.join(weak_buckets)}"
+            )
 
-        return {
-            "service": "S3",
-            "check": "S3 버킷 퍼블릭 접근 차단",
-            "status": "PASS",
-            "score": 10,
-            "message": "모든 S3 버킷의 퍼블릭 접근 차단이 설정되어 있습니다."
-        }
+        return make_result(
+            "S3",
+            "S3 버킷 퍼블릭 접근 차단",
+            "PASS",
+            10,
+            "모든 S3 버킷의 퍼블릭 접근 차단이 설정되어 있습니다."
+        )
 
     except ClientError as e:
         return error_result("S3", "S3 버킷 퍼블릭 접근 차단", e)
@@ -212,16 +263,16 @@ def check_s3_encryption(session):
     s3 = session.client("s3")
 
     try:
-        buckets = s3.list_buckets()["Buckets"]
+        buckets = s3.list_buckets().get("Buckets", [])
 
         if not buckets:
-            return {
-                "service": "S3",
-                "check": "S3 버킷 암호화 설정",
-                "status": "PASS",
-                "score": 10,
-                "message": "S3 버킷이 없습니다."
-            }
+            return make_result(
+                "S3",
+                "S3 버킷 암호화 설정",
+                "PASS",
+                10,
+                "S3 버킷이 없습니다."
+            )
 
         unencrypted_buckets = []
 
@@ -234,21 +285,21 @@ def check_s3_encryption(session):
                 unencrypted_buckets.append(bucket_name)
 
         if unencrypted_buckets:
-            return {
-                "service": "S3",
-                "check": "S3 버킷 암호화 설정",
-                "status": "FAIL",
-                "score": 0,
-                "message": f"암호화 미설정 버킷: {', '.join(unencrypted_buckets)}"
-            }
+            return make_result(
+                "S3",
+                "S3 버킷 암호화 설정",
+                "FAIL",
+                0,
+                f"암호화 미설정 버킷: {', '.join(unencrypted_buckets)}"
+            )
 
-        return {
-            "service": "S3",
-            "check": "S3 버킷 암호화 설정",
-            "status": "PASS",
-            "score": 10,
-            "message": "모든 S3 버킷에 암호화가 설정되어 있습니다."
-        }
+        return make_result(
+            "S3",
+            "S3 버킷 암호화 설정",
+            "PASS",
+            10,
+            "모든 S3 버킷에 암호화가 설정되어 있습니다."
+        )
 
     except ClientError as e:
         return error_result("S3", "S3 버킷 암호화 설정", e)
@@ -258,7 +309,7 @@ def check_security_group_ssh_open(session):
     ec2 = session.client("ec2")
 
     try:
-        groups = ec2.describe_security_groups()["SecurityGroups"]
+        groups = ec2.describe_security_groups().get("SecurityGroups", [])
         risky_groups = []
 
         for group in groups:
@@ -279,21 +330,21 @@ def check_security_group_ssh_open(session):
                         risky_groups.append(f"{group_name}({group_id})")
 
         if risky_groups:
-            return {
-                "service": "Security Group",
-                "check": "SSH 22번 포트 전체 공개 여부",
-                "status": "FAIL",
-                "score": 0,
-                "message": f"SSH가 전체 공개된 보안 그룹: {', '.join(risky_groups)}"
-            }
+            return make_result(
+                "Security Group",
+                "SSH 22번 포트 전체 공개 여부",
+                "FAIL",
+                0,
+                f"SSH가 전체 공개된 보안 그룹: {', '.join(risky_groups)}"
+            )
 
-        return {
-            "service": "Security Group",
-            "check": "SSH 22번 포트 전체 공개 여부",
-            "status": "PASS",
-            "score": 10,
-            "message": "SSH 포트가 전체 공개되어 있지 않습니다."
-        }
+        return make_result(
+            "Security Group",
+            "SSH 22번 포트 전체 공개 여부",
+            "PASS",
+            10,
+            "SSH 포트가 전체 공개되어 있지 않습니다."
+        )
 
     except ClientError as e:
         return error_result("Security Group", "SSH 22번 포트 전체 공개 여부", e)
@@ -303,16 +354,16 @@ def check_rds_public_access(session):
     rds = session.client("rds")
 
     try:
-        instances = rds.describe_db_instances()["DBInstances"]
+        instances = rds.describe_db_instances().get("DBInstances", [])
 
         if not instances:
-            return {
-                "service": "RDS",
-                "check": "RDS 퍼블릭 접근 여부",
-                "status": "PASS",
-                "score": 10,
-                "message": "RDS 인스턴스가 없습니다."
-            }
+            return make_result(
+                "RDS",
+                "RDS 퍼블릭 접근 여부",
+                "PASS",
+                10,
+                "RDS 인스턴스가 없습니다."
+            )
 
         public_instances = []
 
@@ -321,21 +372,21 @@ def check_rds_public_access(session):
                 public_instances.append(db.get("DBInstanceIdentifier"))
 
         if public_instances:
-            return {
-                "service": "RDS",
-                "check": "RDS 퍼블릭 접근 여부",
-                "status": "FAIL",
-                "score": 0,
-                "message": f"퍼블릭 접근 가능한 RDS: {', '.join(public_instances)}"
-            }
+            return make_result(
+                "RDS",
+                "RDS 퍼블릭 접근 여부",
+                "FAIL",
+                0,
+                f"퍼블릭 접근 가능한 RDS: {', '.join(public_instances)}"
+            )
 
-        return {
-            "service": "RDS",
-            "check": "RDS 퍼블릭 접근 여부",
-            "status": "PASS",
-            "score": 10,
-            "message": "퍼블릭 접근 가능한 RDS가 없습니다."
-        }
+        return make_result(
+            "RDS",
+            "RDS 퍼블릭 접근 여부",
+            "PASS",
+            10,
+            "퍼블릭 접근 가능한 RDS가 없습니다."
+        )
 
     except ClientError as e:
         return error_result("RDS", "RDS 퍼블릭 접근 여부", e)
@@ -345,43 +396,35 @@ def check_cloudtrail_enabled(session):
     cloudtrail = session.client("cloudtrail")
 
     try:
-        trails = cloudtrail.describe_trails()["trailList"]
+        trails = cloudtrail.describe_trails().get("trailList", [])
 
         if not trails:
-            return {
-                "service": "CloudTrail",
-                "check": "CloudTrail 활성화 여부",
-                "status": "FAIL",
-                "score": 0,
-                "message": "CloudTrail이 생성되어 있지 않습니다."
-            }
+            return make_result(
+                "CloudTrail",
+                "CloudTrail 활성화 여부",
+                "FAIL",
+                0,
+                "CloudTrail이 생성되어 있지 않습니다."
+            )
 
-        return {
-            "service": "CloudTrail",
-            "check": "CloudTrail 활성화 여부",
-            "status": "PASS",
-            "score": 10,
-            "message": "CloudTrail이 생성되어 있습니다."
-        }
+        return make_result(
+            "CloudTrail",
+            "CloudTrail 활성화 여부",
+            "PASS",
+            10,
+            "CloudTrail이 생성되어 있습니다."
+        )
 
     except ClientError as e:
         return error_result("CloudTrail", "CloudTrail 활성화 여부", e)
 
 
-def error_result(service, check, error):
-    return {
-        "service": service,
-        "check": check,
-        "status": "ERROR",
-        "score": 0,
-        "message": str(error)
-    }
-
-
 def run_security_scan(session):
     results = []
 
+    results.append(check_iam_admin_users(session))
     results.append(check_iam_mfa(session))
+    results.append(check_root_mfa(session))
     results.append(check_password_policy(session))
     results.append(check_s3_public_access(session))
     results.append(check_s3_encryption(session))
@@ -393,7 +436,142 @@ def run_security_scan(session):
 
 
 # =========================
-# 메인 화면
+# 리포팅 시스템 연동
+# =========================
+def convert_to_reporting_item(result):
+    check = result.get("check", "")
+    service = result.get("service", "")
+    message = result.get("message", "")
+    status = result.get("status", "")
+
+    mapping = {
+        "IAM 관리자 권한 사용자 점검": {
+            "item": "IAM Admin User",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-12"
+        },
+        "IAM 사용자 MFA 설정 여부": {
+            "item": "IAM User MFA Enabled",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-02"
+        },
+        "Root 계정 MFA 설정 여부": {
+            "item": "Root Account MFA Enabled",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-02"
+        },
+        "계정 비밀번호 정책 설정": {
+            "item": "IAM Password Policy",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-09"
+        },
+        "S3 버킷 퍼블릭 접근 차단": {
+            "item": "S3 Public Access Block",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-01"
+        },
+        "S3 버킷 암호화 설정": {
+            "item": "S3 Bucket Encryption",
+            "risk": "Medium",
+            "kisa_code": "KISA-CLD-05"
+        },
+        "SSH 22번 포트 전체 공개 여부": {
+            "item": "Security Group SSH Open",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-03"
+        },
+        "RDS 퍼블릭 접근 여부": {
+            "item": "RDS Public Access",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-04"
+        },
+        "CloudTrail 활성화 여부": {
+            "item": "CloudTrail Enabled",
+            "risk": "High",
+            "kisa_code": "KISA-CLD-08"
+        },
+    }
+
+    info = mapping.get(check, {
+        "item": check,
+        "risk": "Medium",
+        "kisa_code": "UNKNOWN"
+    })
+
+    converted_status = "Pass" if status == "PASS" else "Fail"
+
+    return {
+        "item": info["item"],
+        "target": service,
+        "risk": info["risk"],
+        "status": converted_status,
+        "kisa_code": info["kisa_code"],
+        "detail": message
+    }
+
+
+def save_scan_result_for_reporting(results):
+    converted_results = [
+        convert_to_reporting_item(result)
+        for result in results
+    ]
+
+    total_checks = len(converted_results)
+    pass_count = sum(1 for item in converted_results if item["status"] == "Pass")
+    fail_count = sum(1 for item in converted_results if item["status"] == "Fail")
+
+    security_score = int((pass_count / total_checks) * 100) if total_checks else 0
+
+    scan_result = {
+        "summary": {
+            "total_checks": total_checks,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+            "security_score": security_score
+        },
+        "results": converted_results
+    }
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    with open(SCAN_RESULT_PATH, "w", encoding="utf-8") as f:
+        json.dump(scan_result, f, ensure_ascii=False, indent=2)
+
+    return scan_result
+
+
+def run_script(script_path):
+    result = subprocess.run(
+        [sys.executable, script_path],
+        capture_output=True,
+        text=True,
+        encoding="utf-8"
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{script_path} 실행 실패\n\n"
+            f"STDOUT:\n{result.stdout}\n\n"
+            f"STDERR:\n{result.stderr}"
+        )
+
+    return result.stdout
+
+
+def generate_security_report():
+    run_script("reporting/enrich_findings.py")
+    run_script("reporting/generate_report.py")
+    run_script("reporting/generate_pdf.py")
+
+
+def load_report_markdown():
+    if REPORT_MD_PATH.exists():
+        return REPORT_MD_PATH.read_text(encoding="utf-8")
+    return ""
+
+
+# =========================
+# 웹 화면
 # =========================
 @app.route("/")
 def index():
@@ -411,7 +589,7 @@ def index():
             }
 
             .container {
-                max-width: 700px;
+                max-width: 720px;
                 margin: auto;
                 background: white;
                 padding: 40px;
@@ -458,7 +636,10 @@ def index():
                 border-radius: 8px;
                 color: #92400e;
                 font-size: 14px;
-                line-height: 1.6;
+            }
+
+            .notice strong {
+                color: #78350f;
             }
         </style>
     </head>
@@ -476,12 +657,13 @@ def index():
                 <label>Region</label>
                 <input type="text" name="region" value="ap-northeast-2" required>
 
-                <button type="submit">보안 점검 실행</button>
+                <button type="submit">보안 점검 실행 및 리포트 생성</button>
             </form>
 
             <div class="notice">
-                입력한 AWS 키는 서버에 저장하지 않고, 점검 요청 처리에만 사용됩니다.<br>
-                점검 결과는 Gemini를 통해 자연어 리포트로 변환되어 함께 표시됩니다.
+                <strong>안내:</strong>
+                입력한 AWS 키는 서버에 저장하지 않고 점검 요청 처리에만 사용됩니다.
+                점검 후 자동으로 자연어 리포트와 PDF 리포트가 생성됩니다.
             </div>
         </div>
     </body>
@@ -489,14 +671,14 @@ def index():
     """)
 
 
-# =========================
-# 점검 실행 후 report 출력
-# =========================
 @app.route("/scan", methods=["POST"])
 def scan():
     access_key = request.form.get("access_key")
     secret_key = request.form.get("secret_key")
     region = request.form.get("region")
+
+    report_error = None
+    report_md = ""
 
     try:
         aws_session = boto3.Session(
@@ -505,13 +687,28 @@ def scan():
             region_name=region
         )
 
+        # 자격 증명 확인
+        sts = aws_session.client("sts")
+        sts.get_caller_identity()
+
+        # 1. AWS 자동 보안 점검
         results = run_security_scan(aws_session)
+
+        # 2. 네 리포트 로직 입력 파일 생성
+        save_scan_result_for_reporting(results)
+
+        # 3. 네 리포팅 파이프라인 실행
+        try:
+            generate_security_report()
+            report_md = load_report_markdown()
+        except Exception as e:
+            report_error = str(e)
 
     except NoCredentialsError:
         return "<h2>AWS 자격 증명이 올바르지 않습니다.</h2>"
 
     except Exception as e:
-        return f"<h2>점검 실행 중 오류 발생</h2><pre>{str(e)}</pre>"
+        return f"<h2>점검 중 오류 발생</h2><pre>{str(e)}</pre>"
 
     total_score = sum(item["score"] for item in results)
     max_score = len(results) * 10
@@ -521,12 +718,7 @@ def scan():
     fail_count = sum(1 for item in results if item["status"] == "FAIL")
     error_count = sum(1 for item in results if item["status"] == "ERROR")
 
-    gemini_report = generate_gemini_report(
-        results,
-        total_score,
-        max_score,
-        percent
-    )
+    pdf_exists = REPORT_PDF_PATH.exists()
 
     return render_template_string("""
     <!DOCTYPE html>
@@ -554,10 +746,6 @@ def scan():
                 margin-bottom: 30px;
             }
 
-            .summary h1 {
-                margin-top: 0;
-            }
-
             .score {
                 font-size: 48px;
                 font-weight: bold;
@@ -578,16 +766,6 @@ def scan():
                 text-align: center;
             }
 
-            .gemini {
-                background: white;
-                padding: 30px;
-                border-radius: 16px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-                margin-bottom: 30px;
-                line-height: 1.8;
-                white-space: pre-wrap;
-            }
-
             table {
                 width: 100%;
                 border-collapse: collapse;
@@ -595,6 +773,7 @@ def scan():
                 border-radius: 16px;
                 overflow: hidden;
                 box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                margin-bottom: 30px;
             }
 
             th, td {
@@ -623,11 +802,49 @@ def scan():
                 font-weight: bold;
             }
 
+            .pdf-button {
+                display: inline-block;
+                padding: 14px 20px;
+                background: #2563eb;
+                color: white;
+                border-radius: 10px;
+                text-decoration: none;
+                font-weight: bold;
+                margin-bottom: 20px;
+            }
+
+            .report-box {
+                background: white;
+                padding: 25px;
+                border-radius: 16px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+                margin-top: 30px;
+            }
+
+            pre {
+                white-space: pre-wrap;
+                word-break: break-word;
+                background: #f9fafb;
+                padding: 20px;
+                border-radius: 12px;
+                max-height: 500px;
+                overflow: auto;
+            }
+
+            .error-box {
+                background: #fee2e2;
+                color: #991b1b;
+                padding: 20px;
+                border-radius: 12px;
+                margin-bottom: 30px;
+                white-space: pre-wrap;
+            }
+
             .back {
                 display: inline-block;
                 margin-top: 25px;
-                text-decoration: none;
                 color: #2563eb;
+                text-decoration: none;
                 font-weight: bold;
             }
         </style>
@@ -658,10 +875,17 @@ def scan():
                 </div>
             </div>
 
-            <div class="gemini">
-                <h2>Gemini 자연어 분석 리포트</h2>
-                {{ gemini_report }}
+            {% if report_error %}
+            <div class="error-box">
+                <strong>리포트 생성 중 오류가 발생했습니다.</strong>
+                <br><br>
+                {{ report_error }}
             </div>
+            {% endif %}
+
+            {% if pdf_exists %}
+                <a class="pdf-button" href="/download-report">PDF 리포트 다운로드</a>
+            {% endif %}
 
             <table>
                 <thead>
@@ -686,6 +910,15 @@ def scan():
                 </tbody>
             </table>
 
+            <div class="report-box">
+                <h2>자연어 기반 리포트 미리보기</h2>
+                {% if report_md %}
+                    <pre>{{ report_md }}</pre>
+                {% else %}
+                    <p>리포트가 아직 생성되지 않았습니다.</p>
+                {% endif %}
+            </div>
+
             <a class="back" href="/">← 다시 점검하기</a>
         </div>
     </body>
@@ -699,7 +932,21 @@ def scan():
     fail_count=fail_count,
     error_count=error_count,
     region=region,
-    gemini_report=gemini_report)
+    pdf_exists=pdf_exists,
+    report_md=report_md,
+    report_error=report_error)
+
+
+@app.route("/download-report")
+def download_report():
+    if not REPORT_PDF_PATH.exists():
+        return "<h2>PDF 리포트가 아직 생성되지 않았습니다.</h2>"
+
+    return send_file(
+        REPORT_PDF_PATH,
+        as_attachment=True,
+        download_name="security_report.pdf"
+    )
 
 
 if __name__ == "__main__":
