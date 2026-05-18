@@ -1,123 +1,184 @@
 import boto3
+from botocore.exceptions import ClientError
+
 
 def check_rds_public_access():
-    rds = boto3.client("rds", region_name="ap-northeast-2")
+
+    rds = boto3.client(
+        "rds",
+        region_name="ap-northeast-2"
+    )
+
     results = []
 
     print("\n=== RDS 점검 결과 ===")
 
-    response = rds.describe_db_instances()
-    db_instances = response["DBInstances"]
+    try:
 
-    if not db_instances:
-        print("RDS 인스턴스가 없습니다.")
-        return results
+        response = rds.describe_db_instances()
 
-    for db in db_instances:
-        db_id = db["DBInstanceIdentifier"]
+        db_instances = response["DBInstances"]
 
-        # -----------------------------
-        # 1. Public Access 검사
-        # -----------------------------
-        public = db.get("PubliclyAccessible")
+        # -------------------------------------------------
+        # RDS 없음
+        # -------------------------------------------------
 
-        if public:
-            print(f"[FAIL] {db_id} - Public 접근 가능")
+        if not db_instances:
+
+            print("[INFO] RDS 인스턴스가 없습니다.")
+
             results.append({
-                "item": "RDS Public Access",
-                "target": db_id,
-                "risk": "High",
-                "status": "Fail",
+                "item": "RDS Check",
+                "target": "None",
+                "risk": "Info",
+                "status": "INFO",
                 "kisa_code": "KISA-CLD-04",
-                "detail": f"{db_id} 인스턴스는 Publicly Accessible 상태입니다."
-            })
-        else:
-            print(f"[PASS] {db_id} - Public 접근 차단")
-            results.append({
-                "item": "RDS Public Access",
-                "target": db_id,
-                "risk": "Low",
-                "status": "Pass",
-                "kisa_code": "KISA-CLD-04",
-                "detail": f"{db_id} 인스턴스는 Public 접근이 차단되어 있습니다."
+                "detail": "점검 대상 RDS 인스턴스가 없습니다."
             })
 
-        # -----------------------------
-        # 2. 암호화 검사
-        # -----------------------------
-        encrypted = db.get("StorageEncrypted")
+            return results
 
-        if encrypted:
-            print(f"[PASS] {db_id} - 암호화 활성화")
-            results.append({
-                "item": "RDS Encryption",
-                "target": db_id,
-                "risk": "Low",
-                "status": "Pass",
-                "kisa_code": "KISA-CLD-05",
-                "detail": f"{db_id} 인스턴스는 암호화가 적용되어 있습니다."
-            })
-        else:
-            print(f"[FAIL] {db_id} - 암호화 비활성화")
-            results.append({
-                "item": "RDS Encryption",
-                "target": db_id,
-                "risk": "High",
-                "status": "Fail",
-                "kisa_code": "KISA-CLD-05",
-                "detail": f"{db_id} 인스턴스는 암호화가 적용되어 있지 않습니다."
-            })
+        for db in db_instances:
 
-        # -----------------------------
-        # 3. 자동 백업 검사
-        # -----------------------------
-        backup = db.get("BackupRetentionPeriod", 0)
+            db_id = db["DBInstanceIdentifier"]
 
-        if backup > 0:
-            print(f"[PASS] {db_id} - 자동 백업 활성화")
-            results.append({
-                "item": "RDS Backup",
-                "target": db_id,
-                "risk": "Low",
-                "status": "Pass",
-                "kisa_code": "KISA-CLD-06",
-                "detail": f"{db_id} 인스턴스는 자동 백업이 설정되어 있습니다."
-            })
-        else:
-            print(f"[FAIL] {db_id} - 자동 백업 비활성화")
-            results.append({
-                "item": "RDS Backup",
-                "target": db_id,
-                "risk": "Medium",
-                "status": "Fail",
-                "kisa_code": "KISA-CLD-06",
-                "detail": f"{db_id} 인스턴스는 자동 백업이 설정되어 있지 않습니다."
-            })
+            # -------------------------------------------------
+            # 1. Public Access 검사
+            # -------------------------------------------------
 
-        # -----------------------------
-        # 4. Multi-AZ 검사
-        # -----------------------------
-        multi_az = db.get("MultiAZ")
+            public = db.get("PubliclyAccessible")
 
-        if multi_az:
-            print(f"[PASS] {db_id} - Multi-AZ 활성화")
-            results.append({
-                "item": "RDS Multi-AZ",
-                "target": db_id,
-                "risk": "Low",
-                "status": "Pass",
-                "kisa_code": "KISA-CLD-07",
-                "detail": f"{db_id} 인스턴스는 Multi-AZ 구성이 활성화되어 있습니다."
-            })
-        else:
-            print(f"[FAIL] {db_id} - Multi-AZ 비활성화")
-            results.append({
-                "item": "RDS Multi-AZ",
-                "target": db_id,
-                "risk": "Medium",
-                "status": "Fail",
-                "kisa_code": "KISA-CLD-07",
-                "detail": f"{db_id} 인스턴스는 Multi-AZ 구성이 비활성화되어 있습니다."
-            })
+            if public:
+
+                print(f"[FAIL] {db_id} - Public 접근 가능")
+
+                results.append({
+                    "item": "RDS Public Access",
+                    "target": db_id,
+                    "risk": "High",
+                    "status": "FAIL",
+                    "kisa_code": "KISA-CLD-04",
+                    "detail": f"{db_id} 인스턴스는 Public 접근이 허용되어 있습니다."
+                })
+
+            else:
+
+                print(f"[PASS] {db_id} - Public 접근 차단")
+
+                results.append({
+                    "item": "RDS Public Access",
+                    "target": db_id,
+                    "risk": "Low",
+                    "status": "PASS",
+                    "kisa_code": "KISA-CLD-04",
+                    "detail": f"{db_id} 인스턴스는 Public 접근이 차단되어 있습니다."
+                })
+
+            # -------------------------------------------------
+            # 2. 암호화 검사
+            # -------------------------------------------------
+
+            encrypted = db.get("StorageEncrypted")
+
+            if encrypted:
+
+                print(f"[PASS] {db_id} - 암호화 활성화")
+
+                results.append({
+                    "item": "RDS Encryption",
+                    "target": db_id,
+                    "risk": "Low",
+                    "status": "PASS",
+                    "kisa_code": "KISA-CLD-05",
+                    "detail": f"{db_id} 인스턴스는 저장소 암호화가 적용되어 있습니다."
+                })
+
+            else:
+
+                print(f"[FAIL] {db_id} - 암호화 비활성화")
+
+                results.append({
+                    "item": "RDS Encryption",
+                    "target": db_id,
+                    "risk": "High",
+                    "status": "FAIL",
+                    "kisa_code": "KISA-CLD-05",
+                    "detail": f"{db_id} 인스턴스는 저장소 암호화가 적용되어 있지 않습니다."
+                })
+
+            # -------------------------------------------------
+            # 3. 자동 백업 검사
+            # -------------------------------------------------
+
+            backup = db.get("BackupRetentionPeriod", 0)
+
+            if backup > 0:
+
+                print(f"[PASS] {db_id} - 자동 백업 활성화")
+
+                results.append({
+                    "item": "RDS Backup",
+                    "target": db_id,
+                    "risk": "Low",
+                    "status": "PASS",
+                    "kisa_code": "KISA-CLD-06",
+                    "detail": f"{db_id} 인스턴스는 자동 백업이 설정되어 있습니다."
+                })
+
+            else:
+
+                print(f"[FAIL] {db_id} - 자동 백업 비활성화")
+
+                results.append({
+                    "item": "RDS Backup",
+                    "target": db_id,
+                    "risk": "Medium",
+                    "status": "FAIL",
+                    "kisa_code": "KISA-CLD-06",
+                    "detail": f"{db_id} 인스턴스는 자동 백업이 설정되어 있지 않습니다."
+                })
+
+            # -------------------------------------------------
+            # 4. Multi-AZ 검사
+            # -------------------------------------------------
+
+            multi_az = db.get("MultiAZ")
+
+            if multi_az:
+
+                print(f"[PASS] {db_id} - Multi-AZ 활성화")
+
+                results.append({
+                    "item": "RDS Multi-AZ",
+                    "target": db_id,
+                    "risk": "Low",
+                    "status": "PASS",
+                    "kisa_code": "KISA-CLD-07",
+                    "detail": f"{db_id} 인스턴스는 Multi-AZ 구성이 활성화되어 있습니다."
+                })
+
+            else:
+
+                print(f"[FAIL] {db_id} - Multi-AZ 비활성화")
+
+                results.append({
+                    "item": "RDS Multi-AZ",
+                    "target": db_id,
+                    "risk": "Medium",
+                    "status": "FAIL",
+                    "kisa_code": "KISA-CLD-07",
+                    "detail": f"{db_id} 인스턴스는 Multi-AZ 구성이 비활성화되어 있습니다."
+                })
+
+    except ClientError:
+
+        results.append({
+            "item": "RDS Check",
+            "target": "RDS",
+            "risk": "Info",
+            "status": "INFO",
+            "kisa_code": "KISA-CLD-04",
+            "detail": "RDS 정보를 조회할 수 없습니다."
+        })
 
     return results

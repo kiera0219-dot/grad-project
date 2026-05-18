@@ -49,6 +49,9 @@ def build_full_report_prompt(scan_result, enriched_findings):
 6. 보안 비전문가도 이해할 수 있도록 쉬운 한국어로 작성한다.
 7. 출력은 Markdown 형식으로만 작성한다.
 8. 코드블록은 사용하지 않는다.
+9. status가 INFO인 항목은 취약점 분석에 포함하지 않는다.
+10. status가 FAIL인 항목만 상세 취약점 분석에 포함한다.
+11. status가 PASS인 항목은 양호 항목 수 계산에만 사용한다.
 
 [스캔 결과 요약]
 {json.dumps(scan_result.get("summary", {}), ensure_ascii=False, indent=2)}
